@@ -57,8 +57,10 @@ public class EricA extends Critter {
             return MoveHelper.optimalTurn(info, closestEnemy);
 
         // Commit to direction of last infection
-        if (commitTimer-- > 0)
+        if (commitTimer > 0) {
+            commitTimer--;
             return MoveHelper.optimalTurn(info, commitDir);
+        }
 
         return switch (state) {
             case FIND_OTHERS -> findOthers(info);
@@ -131,13 +133,12 @@ public class EricA extends Critter {
         signal = Math.max(signal - MIGRATE_INHIBIT, 0);
 
         // Randomly turn to prevent parallel migrations (less collisions)
-        if (Math.random() <= MIGRATE_TURN) {
+        if (Math.random() <= MIGRATE_TURN)
             migrateDir = MoveHelper.toCardinal(MoveHelper.shiftDir(MoveHelper.toGrid(migrateDir), new int[] {-1, 1} [(int) (2*Math.random())]));
-        }
 
         // Prioritize reaching a new destination
         if (info.getFront() == Neighbor.WALL)
-            migrateDir = MoveHelper.toCardinal(MoveHelper.shiftDir(MoveHelper.toGrid(migrateDir), new int[] {2, -1, 1} [(int) (3*Math.random())]));
+            migrateDir = MoveHelper.toCardinal(MoveHelper.shiftDir(MoveHelper.toGrid(migrateDir), 1));
         if (info.getDirection() != migrateDir)
             return MoveHelper.optimalTurn(info, migrateDir);
         if (info.getFront() == Neighbor.EMPTY)
