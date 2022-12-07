@@ -4,11 +4,11 @@ import java.awt.Color;
  * simulation.Critter that optimizes flytrap behavior by making more efficient movement and prioritizing groups of critters
  */
 public class EricA extends Critter {
-    private enum Frame { FIND_OTHERS, GROUP, MIGRATE }
+    private enum Frame { CLUMP, FIND_OTHERS, GROUP, MIGRATE }
 
     /* State variables */
 
-    private Frame state = Frame.FIND_OTHERS;
+    private Frame state = Frame.CLUMP;
     private Direction commitDir = Direction.EAST; // Direction of last infection
     private Direction migrateDir = Direction.EAST; // Direction to travel during migration
     private boolean justBorn = true;
@@ -20,10 +20,13 @@ public class EricA extends Critter {
 
     /* State variables across all critters */
 
-    private static int signal = 0; // Controls migration state across all critters
+    private static int mSignal = 0; // Controls migration state across all critters
+    private static int cSignal = 0; // Controls migration state across all critters
 
     /* Parameters to tweak behavior */
 
+    private static final int CLUMP_THRESHOLD = 1000; // When `signal` reaches this, migrate critters
+    private static final int CLUMP_SPEED = 1; // When `signal` reaches this, migrate critters
     private static final int MIGRATE_THRESHOLD = 18000; // When `signal` reaches this, migrate critters
     private static final int MIGRATE_PROMOTE = 1; // `signal` rate of increase per critter
     private static final int MIGRATE_INHIBIT = 25; // `signal` rate of decrease per critter in `MIGRATE` state
@@ -37,32 +40,45 @@ public class EricA extends Critter {
 
     @Override
     public Action getMove(CritterInfo info) {
-        // Handle style status
+        // Handle style variables
         justBorn = false;
         updateColor();
 
         Direction closestEnemy = MoveHelper.closestNeighbor(info, Neighbor.OTHER);
 
-        // Always prioritize infecting other critters
+        // Always prioritize infecting critters that are directly in front of critter
         if (info.getFront() == Neighbor.OTHER) {
             commitDir = info.getDirection();
             commitTimer = COMMIT_TIMER_INIT;
             return Action.INFECT;
-        // Run when chased from behind
-        } else if (info.getBack() == Neighbor.OTHER && info.getFront() == Neighbor.EMPTY)
+        }
+
+        // Run when an enemy is behind this critter
+        //
+        // This prevents the critter from wasting two movements turning twice and risking being infected
+        if (info.getBack() == Neighbor.OTHER && info.getFront() == Neighbor.EMPTY) {
             return Action.HOP;
+        }
 
-        // Turn towards enemies close by
-        if (closestEnemy != null)
+        // Turn towards enemies on the left/right sides of this critter
+        //
+        // Although the odds that this critter can turn and infect in time are low, it allows other
+        // nearby critters to turn in the same direction to defend
+        if (closestEnemy != null) {
             return MoveHelper.optimalTurn(info, closestEnemy);
+        }
 
-        // Commit to direction of last infection
+        // If no other high priority moves exist, keep facing direction of the last infection
+        //
+        // This raises the odds of clusters winning long battles by
         if (commitTimer > 0) {
             commitTimer--;
             return MoveHelper.optimalTurn(info, commitDir);
         }
 
+        // Change detailed behavior based on current state
         return switch (state) {
+            case CLUMP -> clump(info);
             case FIND_OTHERS -> findOthers(info);
             case GROUP -> group(info);
             case MIGRATE -> migrate(info);
@@ -70,27 +86,42 @@ public class EricA extends Critter {
     }
 
     /**
-     * Directs the finding state of the critter in which it attempts to locate other same-type critters and form
-     * a protective colony
+     * Directs the `CLUMP` state of the critter at the start of the game where critters sweep to the left, allowing
+     * the number of friends to build up as the game starts.
      * @return the Action to advance this critter's finding behavior
      */
-    public Action findOthers(CritterInfo info) {
-        // Attempt to find and group with same type critter
-        Direction closestFriend = MoveHelper.closestNeighbor(info, Neighbor.SAME);
-        if (closestFriend != null) {
-            state = Frame.GROUP;
-            return MoveHelper.optimalTurn(info, MoveHelper.directionOf(info, closestFriend));
+    public Action clump(CritterInfo info) {
+        if ((cSignal += CLUMP_SPEED) >= CLUMP_THRESHOLD) {
+            state = Frame.FIND_OTHERS;
+            return findOthers(info);
         }
 
-        // Continue search otherwise
+        if (info.getDirection() != Direction.WEST) {
+            return MoveHelper.optimalTurn(info, Direction.WEST);
+        }
+        
         return info.getFront() == Neighbor.WALL ? Action.RIGHT : Action.HOP;
     }
 
     /**
-     * Directs the grouping state of the critter in which it forms a colony that faces empty locations;
-     * Grouping strengthens flytrap behavior by covering weak spots of individual critters. The critter also
-     * emits signals to promote migration, eventually reaching a culmination in which many critters move
-     * to another colony. This promotes growth when there is a large amount of this critter
+     * Directs the `FIND_OTHERS` state of the critter in which it attempts to locate friendly critters and form
+     * a protective colony
+     * @return the Action to advance this critter's finding behavior
+     */
+    public Action findOthers(CritterInfo info) {
+        if (info.getDirection() != Direction.WEST) {
+            state = Frame.GROUP;
+            return group(info);
+        }
+
+        // Continue search otherwise, turning right on walls in a clockwise fashion to sweep corners
+        return info.getFront() == Neighbor.WALL ? Action.RIGHT : Action.HOP;
+    }
+
+    /**
+     * Directs the `GROUP` state of the critter in which it maintains a flytrap colony;
+     * Grouping strengthens flytrap behavior by covering weak spots of individual critters.
+     * When there is an abundance of friendly critters, some move into the migration state.
      * @param info info from this critter's turn
      * @return the Action to advance this critter's grouping behavior
      */
@@ -99,10 +130,10 @@ public class EricA extends Critter {
         Direction closestEmpty = MoveHelper.closestNeighbor(info, Neighbor.EMPTY);
 
         // Migrate to other group after reaching a certain threshold across all critters
-        if ((signal += MIGRATE_PROMOTE) >= MIGRATE_THRESHOLD) {
+        if ((mSignal += MIGRATE_PROMOTE) >= MIGRATE_THRESHOLD && closestEmpty != null) {
             state = Frame.MIGRATE;
             migrateDir = MoveHelper.toCardinal(MoveHelper.shiftDir(MoveHelper.toGrid(migrateDir), 1));
-            return MoveHelper.optimalTurn(info, migrateDir);
+            return migrate(info);
         }
 
         // Revert to searching if no friends surround the critter
@@ -112,15 +143,16 @@ public class EricA extends Critter {
         }
 
         // Create barrier facing vulnerable space
-        if (closestEmpty != null)
+        if (closestEmpty != null) {
             return MoveHelper.optimalTurn(info, closestEmpty);
+        }
 
-        // Face direction of friends to optimize flytrap behavior
+        // Face direction of friends to create defensive walls
         return MoveHelper.optimalTurn(info, MoveHelper.directionOf(info, closestFriend));
     }
 
     /**
-     * Directs the migration state of the critter in which it moves across the grid in attempt to locate another
+     * Directs the `MIGRATE` state of the critter in which it moves across the grid to establish a new
      * colony. As it migrates, it will emit inhibition signals to prevent more than small groups of critters
      * from moving at once.
      * @param info info from this critter's turn
@@ -130,21 +162,30 @@ public class EricA extends Critter {
         Direction closestFriend = MoveHelper.closestNeighbor(info, Neighbor.SAME);
 
         // Decrease migration rate of other critters
-        signal = Math.max(signal - MIGRATE_INHIBIT, 0);
+        mSignal = Math.max(mSignal - MIGRATE_INHIBIT, 0);
 
-        // Randomly turn to prevent parallel migrations (less collisions)
-        if (Math.random() <= MIGRATE_TURN)
-            migrateDir = MoveHelper.toCardinal(MoveHelper.shiftDir(MoveHelper.toGrid(migrateDir), new int[] {-1, 1} [(int) (2*Math.random())]));
+        // Randomly turn left and right to create more varied migration patterns
+        //
+        // A jagged migration allows critters to reach new locations on the map rather than get stuck in front of
+        // large clumps of enemies
+        if (Math.random() <= MIGRATE_TURN) {
+            migrateDir = MoveHelper.toCardinal(MoveHelper.shiftDir(MoveHelper.toGrid(migrateDir), Math.random() < 0.5 ? 1 : -1));
+        }
 
-        // Prioritize reaching a new destination
-        if (info.getFront() == Neighbor.WALL)
+        // Move migration if a wall is in the way
+        if (info.getFront() == Neighbor.WALL) {
             migrateDir = MoveHelper.toCardinal(MoveHelper.shiftDir(MoveHelper.toGrid(migrateDir), 1));
-        if (info.getDirection() != migrateDir)
-            return MoveHelper.optimalTurn(info, migrateDir);
-        if (info.getFront() == Neighbor.EMPTY)
-            return Action.HOP;
+        }
 
-        // Attach to new group if it exists
+        // Keep hopping in the migration direction until a group is reached
+        if (info.getDirection() != migrateDir) {
+            return MoveHelper.optimalTurn(info, migrateDir);
+        }
+        if (info.getFront() == Neighbor.EMPTY) {
+            return Action.HOP;
+        }
+
+        // Attach to a new group
         if (closestFriend != null) {
             state = Frame.GROUP;
             return MoveHelper.optimalTurn(info, MoveHelper.directionOf(info, closestFriend));
@@ -174,19 +215,19 @@ public class EricA extends Critter {
 
     @Override
     public String toString() {
-        // ✿❀✾✽✼✤✥❈
-        // ⚴☥⚳⚵⚸♆
-        // ❉✼✸✱⚝
-        // ◜◝◞◟
-        // ◴◷◶◵
-        // ▓▒░
-        // ◐◓◑◒
+        // flower       ✿❀✾✽✼✤✥❈
+        // odd          ⚴☥⚳⚵⚸♆
+        // star         ❉✼✸✱⚝
+        // loading      ◜◝◞◟
+        // loading 2    ◴◷◶◵
+        // wall         ▓▒░
+        // rolling      ◐◓◑◒
         return justBorn ?  "⏺" : "✿";
     }
 }
 
 /**
- * Static class to provide helper methods and optimal movements, such as shortest cost turns
+ * Static class to provide helper methods for optimal movements, such as shortest cost turns
  */
 class MoveHelper {
     /**
@@ -219,7 +260,7 @@ class MoveHelper {
     }
 
     /**
-     * Returns a direction shifted left or right
+     * Returns a direction shifted left or right in a cyclic manner
      * @param dir An initial Grid.Direction
      * @param shift The amount to shift clockwise
      * @return The shifted GridDirection
