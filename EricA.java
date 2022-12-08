@@ -25,12 +25,12 @@ public class EricA extends Critter {
 
     /* Parameters to tweak behavior */
 
-    private static final int CLUMP_THRESHOLD = 1000; // When `signal` reaches this, migrate critters
+    private static final int CLUMP_THRESHOLD = 2000; // When `signal` reaches this, migrate critters
     private static final int CLUMP_SPEED = 1; // When `signal` reaches this, migrate critters
     private static final int MIGRATE_THRESHOLD = 18000; // When `signal` reaches this, migrate critters
     private static final int MIGRATE_PROMOTE = 1; // `signal` rate of increase per critter
     private static final int MIGRATE_INHIBIT = 25; // `signal` rate of decrease per critter in `MIGRATE` state
-    private static final double MIGRATE_TURN = 0.35; // Proportion of frames where migrating critters turn randomly
+    private static final double MIGRATE_TURN = 0.25; // Proportion of frames where migrating critters turn randomly
     private static final int COMMIT_TIMER_INIT = 6; // How many frames the critter stays facing the last infection
 
     private static final double COL_SCALE_MAX = 2.75;
@@ -99,7 +99,7 @@ public class EricA extends Critter {
         if (info.getDirection() != Direction.WEST) {
             return MoveHelper.optimalTurn(info, Direction.WEST);
         }
-        
+
         return info.getFront() == Neighbor.WALL ? Action.RIGHT : Action.HOP;
     }
 
@@ -109,7 +109,8 @@ public class EricA extends Critter {
      * @return the Action to advance this critter's finding behavior
      */
     public Action findOthers(CritterInfo info) {
-        if (info.getDirection() != Direction.WEST) {
+        Direction closestFriend = MoveHelper.closestNeighbor(info, Neighbor.SAME);
+        if (closestFriend != null) {
             state = Frame.GROUP;
             return group(info);
         }
